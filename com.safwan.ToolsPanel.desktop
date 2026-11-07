@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Tools Panel
+Comment=Start / stop desktop tools without a terminal
+Exec=/usr/bin/python3 "/home/aishahidul/GitHub Repository/ToolsPanel/tools_panel.py"
+Path=/home/aishahidul/GitHub Repository/ToolsPanel
+Icon=applications-system
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=com.safwan.ToolsPanel
