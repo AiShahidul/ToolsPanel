@@ -4,10 +4,14 @@
 
 from __future__ import annotations
 
+import math
 import os
+import shutil
 import signal
+import struct
 import subprocess
 import threading
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -21,6 +25,7 @@ from gi.repository import Adw, GLib, Gtk, Gio  # noqa: E402
 HOME = Path.home()
 CACHE = HOME / ".cache" / "tools-panel"
 CACHE.mkdir(parents=True, exist_ok=True)
+SOUND_DIR = CACHE / "sounds"
 
 
 def _first_existing(*candidates: Path) -> Path | None:
@@ -57,13 +62,31 @@ BROWSER_ARRANGE = _first_existing(
 
 CSS = """
 window {
-  background: #1a1b1e;
+  background: #17181b;
 }
 .header {
   font-size: 15px;
   font-weight: 600;
   color: #e8eaed;
   margin: 4px 0 8px 0;
+}
+.card {
+  background: #1d1f23;
+  border: 1px solid #2a2c31;
+  border-radius: 12px;
+  padding: 8px 10px;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.card:hover {
+  background: #212429;
+  border-color: #3a3d44;
+}
+.tool-icon {
+  background: #26292f;
+  border-radius: 9px;
+  color: #9db4ff;
+  min-width: 34px;
+  min-height: 34px;
 }
 .row-name {
   font-size: 13px;
@@ -75,42 +98,146 @@ window {
   color: #9aa0a6;
 }
 .btn-status {
-  min-width: 108px;
+  min-width: 104px;
   min-height: 34px;
-  border-radius: 8px;
-  font-weight: 600;
-  border: none;
-  color: #fff;
+  border-radius: 9px;
+  font-weight: 500;
+  font-size: 12px;
+  border: 1px solid transparent;
+  transition: background-color 150ms ease;
 }
-.btn-stopped {
-  background: #c62828;
+.btn-idle {
+  background: #23252a;
+  color: #c7ccd1;
+  border-color: #34373d;
 }
-.btn-stopped:hover {
-  background: #e53935;
+.btn-idle:hover {
+  background: #2c2f35;
 }
 .btn-running {
   background: #2e7d32;
+  color: #ffffff;
 }
 .btn-running:hover {
-  background: #43a047;
+  background: #357a38;
 }
 .btn-busy {
-  background: #f9a825;
+  background: #f0a022;
   color: #1a1b1e;
 }
+.btn-status:focus-visible,
+.btn-log:focus-visible,
+.btn-mute:focus-visible {
+  outline: 2px solid #6ea8ff;
+  outline-offset: 2px;
+}
 .btn-log {
-  min-width: 64px;
+  min-width: 40px;
   min-height: 34px;
+  border-radius: 9px;
+  background: #23252a;
+  color: #c7ccd1;
+  border: 1px solid #34373d;
+  transition: background-color 150ms ease;
+}
+.btn-log:hover {
+  background: #2c2f35;
+}
+.btn-mute {
+  color: #9aa0a6;
 }
 .footer {
   font-size: 11px;
-  color: #9aa0a6;
+  color: #8a9096;
   margin-top: 8px;
 }
 .missing {
   opacity: 0.45;
 }
 """
+
+
+class Sound:
+    """Short synthesized click tones; no bundled audio files needed."""
+
+    SPECS = {
+        "tap": 520.0,
+        "run": 660.0,
+        "stop": 420.0,
+    }
+
+    def __init__(self) -> None:
+        self.enabled = True
+        self._player = self._find_player()
+        self._files: dict[str, Path] = {}
+        self._prepare()
+
+    @staticmethod
+    def _find_player() -> list[str] | None:
+        for cmd in (
+            ["paplay"],
+            ["pw-play"],
+            ["aplay", "-q"],
+            ["canberra-gtk-play", "-f"],
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet"],
+        ):
+            if shutil.which(cmd[0]):
+                return cmd
+        return None
+
+    def _prepare(self) -> None:
+        try:
+            SOUND_DIR.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return
+        for kind, freq in self.SPECS.items():
+            path = SOUND_DIR / f"{kind}.wav"
+            if not path.is_file():
+                try:
+                    self._generate(path, freq)
+                except OSError:
+                    continue
+            self._files[kind] = path
+
+    @staticmethod
+    def _generate(path: Path, freq: float, ms: int = 130) -> None:
+        rate = 44100
+        total = int(rate * ms / 1000)
+        attack = max(1, int(rate * 0.008))
+        phase = 0.0
+        with wave.open(str(path), "w") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            frames = bytearray()
+            for i in range(total):
+                progress = i / total
+                f = freq * (1.0 + 0.45 * progress)
+                phase += 2.0 * math.pi * f / rate
+                env_in = min(1.0, i / attack)
+                env_out = max(0.0, 1.0 - progress)
+                env = env_in * env_out * env_out
+                sample = math.sin(phase) * env * 0.35
+                frames += struct.pack("<h", int(sample * 32767))
+            w.writeframes(bytes(frames))
+
+    def play(self, kind: str) -> None:
+        if not self.enabled or not self._player:
+            return
+        path = self._files.get(kind)
+        if not path or not path.is_file():
+            return
+        try:
+            subprocess.Popen(
+                self._player + [str(path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+
+
+SOUND = Sound()
 
 
 def _pgrep(match: str) -> list[int]:
@@ -144,6 +271,7 @@ class Tool:
     name: str
     subtitle: str
     kind: str  # daemon | oneshot
+    icon: str = "application-x-executable-symbolic"
     match: str = ""
     start_cmd: list[str] = field(default_factory=list)
     cwd: Path | None = None
@@ -223,6 +351,7 @@ def build_tools() -> list[Tool]:
             name="PDF Folder Mapper",
             subtitle="localhost:5057",
             kind="daemon",
+            icon="view-paged-symbolic",
             match="pdf_folder_mapper_web.py",
             start_cmd=[str(PDF_PY), str(PDF_UTIL / "pdf_folder_mapper_web.py")],
             cwd=PDF_UTIL,
@@ -233,6 +362,7 @@ def build_tools() -> list[Tool]:
             name="PDF Server Upload",
             subtitle="localhost:5058",
             kind="daemon",
+            icon="send-to-symbolic",
             match="pdf_server_upload_web.py",
             start_cmd=[str(PDF_PY), str(PDF_UTIL / "pdf_server_upload_web.py")],
             cwd=PDF_UTIL,
@@ -243,6 +373,7 @@ def build_tools() -> list[Tool]:
             name="Folder MAP Rename",
             subtitle="localhost:5059",
             kind="daemon",
+            icon="document-edit-symbolic",
             match="folder_map_rename_web.py",
             start_cmd=[str(PDF_PY), str(PDF_UTIL / "folder_map_rename_web.py")],
             cwd=PDF_UTIL,
@@ -253,6 +384,7 @@ def build_tools() -> list[Tool]:
             name="IVAC Open Solver",
             subtitle="JS Solver 2.0 UI",
             kind="daemon",
+            icon="system-run-symbolic",
             match=str(SOLVER / "ui.py"),
             start_cmd=[str(SOLVER_PY), str(SOLVER / "ui.py")],
             cwd=SOLVER,
@@ -263,6 +395,7 @@ def build_tools() -> list[Tool]:
             name="IVAC Restart Bot",
             subtitle="WebHost · one-shot",
             kind="oneshot",
+            icon="view-refresh-symbolic",
             start_cmd=["bash", str(IVAC / "Restart_Bot.sh")],
             cwd=IVAC,
             required=[IVAC / "Restart_Bot.sh"],
@@ -272,6 +405,7 @@ def build_tools() -> list[Tool]:
             name="IVAC Restart Panel",
             subtitle="WebHost · one-shot",
             kind="oneshot",
+            icon="view-refresh-symbolic",
             start_cmd=["bash", str(IVAC / "Restart_Panel.sh")],
             cwd=IVAC,
             required=[IVAC / "Restart_Panel.sh"],
@@ -281,6 +415,7 @@ def build_tools() -> list[Tool]:
             name="Browser Auto Arrange",
             subtitle="Chrome×7 + Edge×7",
             kind="oneshot",
+            icon="web-browser-symbolic",
             start_cmd=["bash", str(BROWSER_ARRANGE / "Browser-Auto-Arrange.sh")],
             cwd=BROWSER_ARRANGE,
             required=[BROWSER_ARRANGE / "Browser-Auto-Arrange.sh"],
@@ -294,16 +429,24 @@ TOOLS: list[Tool] = build_tools()
 
 class ToolRow(Gtk.Box):
     def __init__(self, tool: Tool, open_log: Callable[[Tool], None]):
-        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.tool = tool
         self._busy = False
-        self.set_margin_top(4)
-        self.set_margin_bottom(4)
+        self.add_css_class("card")
+        self.set_margin_top(3)
+        self.set_margin_bottom(3)
         if not tool.available():
             self.add_css_class("missing")
 
+        icon = Gtk.Image.new_from_icon_name(tool.icon)
+        icon.set_pixel_size(18)
+        icon.add_css_class("tool-icon")
+        icon.set_valign(Gtk.Align.CENTER)
+        self.append(icon)
+
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         text.set_hexpand(True)
+        text.set_valign(Gtk.Align.CENTER)
         name = Gtk.Label(label=tool.name, xalign=0)
         name.add_css_class("row-name")
         sub_label = tool.subtitle if tool.available() else f"{tool.subtitle} · missing"
@@ -315,27 +458,35 @@ class ToolRow(Gtk.Box):
 
         self.btn = Gtk.Button()
         self.btn.add_css_class("btn-status")
+        self.btn.set_valign(Gtk.Align.CENTER)
         self.btn.connect("clicked", self._on_click)
         self.append(self.btn)
 
-        log_btn = Gtk.Button(label="Log")
+        log_btn = Gtk.Button()
+        log_btn.set_icon_name("text-x-generic-symbolic")
+        log_btn.set_tooltip_text("Open log")
         log_btn.add_css_class("btn-log")
-        log_btn.connect("clicked", lambda *_: open_log(tool))
+        log_btn.set_valign(Gtk.Align.CENTER)
+        log_btn.connect("clicked", self._on_log, open_log)
         self.append(log_btn)
 
         self.refresh()
+
+    def _on_log(self, _btn, open_log: Callable[[Tool], None]) -> None:
+        SOUND.play("tap")
+        open_log(self.tool)
 
     def set_busy(self, busy: bool) -> None:
         self._busy = busy
         self.refresh()
 
     def refresh(self) -> None:
-        self.btn.remove_css_class("btn-stopped")
+        self.btn.remove_css_class("btn-idle")
         self.btn.remove_css_class("btn-running")
         self.btn.remove_css_class("btn-busy")
         if not self.tool.available():
             self.btn.set_label("Missing")
-            self.btn.add_css_class("btn-stopped")
+            self.btn.add_css_class("btn-idle")
             self.btn.set_sensitive(False)
             return
         if self._busy:
@@ -345,31 +496,35 @@ class ToolRow(Gtk.Box):
             return
         self.btn.set_sensitive(True)
         if self.tool.kind == "oneshot":
-            self.btn.set_label("Run")
-            self.btn.add_css_class("btn-stopped")
+            self.btn.set_label("⏵  Run")
+            self.btn.add_css_class("btn-idle")
             return
         if self.tool.is_running():
-            self.btn.set_label("Running")
+            self.btn.set_label("●  Running")
             self.btn.add_css_class("btn-running")
         else:
             self.btn.set_label("Stopped")
-            self.btn.add_css_class("btn-stopped")
+            self.btn.add_css_class("btn-idle")
 
     def _on_click(self, *_args) -> None:
         if self._busy or not self.tool.available():
             return
         if self.tool.kind == "oneshot":
+            SOUND.play("tap")
             self.set_busy(True)
 
             def done(_code: int) -> None:
+                SOUND.play("run")
                 self.set_busy(False)
                 self.refresh()
 
             self.tool.run_oneshot(done)
             return
         if self.tool.is_running():
+            SOUND.play("stop")
             self.tool.stop()
         else:
+            SOUND.play("run")
             if not self.tool.is_running():
                 self.tool.start()
         GLib.timeout_add(500, self.refresh)
@@ -397,7 +552,15 @@ class ToolsPanel(Adw.ApplicationWindow):
             )
         )
 
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.mute_btn = Gtk.ToggleButton()
+        self.mute_btn.set_icon_name("audio-volume-high-symbolic")
+        self.mute_btn.set_tooltip_text("Mute click sound")
+        self.mute_btn.add_css_class("btn-mute")
+        self.mute_btn.add_css_class("flat")
+        self.mute_btn.connect("toggled", self._on_mute)
+        header.pack_end(self.mute_btn)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         root.set_margin_top(10)
         root.set_margin_bottom(14)
         root.set_margin_start(16)
@@ -410,7 +573,7 @@ class ToolsPanel(Adw.ApplicationWindow):
             root.append(row)
 
         foot = Gtk.Label(
-            label="Red = Stopped / Run · Green = Running · click to toggle",
+            label="Green = Running · Stopped / Run stays neutral · click to toggle",
             xalign=0,
         )
         foot.add_css_class("footer")
@@ -422,6 +585,16 @@ class ToolsPanel(Adw.ApplicationWindow):
         self.set_content(view)
 
         GLib.timeout_add_seconds(2, self._tick)
+
+    def _on_mute(self, btn: Gtk.ToggleButton) -> None:
+        muted = btn.get_active()
+        SOUND.enabled = not muted
+        btn.set_icon_name(
+            "audio-volume-muted-symbolic" if muted else "audio-volume-high-symbolic"
+        )
+        btn.set_tooltip_text("Unmute click sound" if muted else "Mute click sound")
+        if not muted:
+            SOUND.play("tap")
 
     def _tick(self) -> bool:
         for row in self.rows:
