@@ -60,7 +60,7 @@ BROWSER_ARRANGE = _first_existing(
     HOME / "MEGA/IVAC Works/Browser arrange",
 ) or (HOME / "MEGA/IVAC Works/Browser arrange")
 
-PAYDESK = _first_existing(
+BROWSER_BOT = _first_existing(
     HOME / "GitHub Repository/ivac-dgepay-confirm",
 ) or (HOME / "GitHub Repository/ivac-dgepay-confirm")
 
@@ -443,17 +443,17 @@ def build_tools() -> list[Tool]:
             env_extra={"MT_NO_BROWSER": "1"},
         ),
         Tool(
-            id="paydesk",
-            name="Pay Desk",
+            id="browser_bot",
+            name="Browser bot",
             subtitle="localhost:8787",
             kind="daemon",
             icon="web-browser-symbolic",
-            match=" -m paydesk",
-            start_cmd=["bash", str(PAYDESK / "Run_Paydesk.sh")],
-            cwd=PAYDESK,
-            required=[PAYDESK / "Run_Paydesk.sh"],
+            match=" -m bot",
+            start_cmd=["bash", str(BROWSER_BOT / "Run_Browser_Bot.sh")],
+            cwd=BROWSER_BOT,
+            required=[BROWSER_BOT / "Run_Browser_Bot.sh"],
             url="http://127.0.0.1:8787",
-            env_extra={"PAYDESK_NO_BROWSER": "1"},
+            env_extra={"BROWSER_BOT_NO_BROWSER": "1"},
         ),
     ]
     return tools
