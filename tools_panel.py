@@ -60,6 +60,12 @@ BROWSER_ARRANGE = _first_existing(
     HOME / "MEGA/IVAC Works/Browser arrange",
 ) or (HOME / "MEGA/IVAC Works/Browser arrange")
 
+PAYDESK = _first_existing(
+    HOME / "GitHub Repository/ivac-dgepay-confirm",
+) or (HOME / "GitHub Repository/ivac-dgepay-confirm")
+
+PHONE_MGR = PDF_ROOT / "T phone_manager"
+
 CSS = """
 window {
   background: #17181b;
@@ -277,6 +283,7 @@ class Tool:
     cwd: Path | None = None
     env_extra: dict[str, str] = field(default_factory=dict)
     required: list[Path] = field(default_factory=list)
+    url: str = ""
 
     def log_path(self) -> Path:
         return CACHE / f"{self.id}.log"
@@ -298,6 +305,8 @@ class Tool:
         return any(p != self_pid for p in pids)
 
     def start(self) -> None:
+        if self.is_running():
+            return
         self.log_path().parent.mkdir(parents=True, exist_ok=True)
         log_f = open(self.log_path(), "ab", buffering=0)
         env = os.environ.copy()
@@ -420,6 +429,32 @@ def build_tools() -> list[Tool]:
             cwd=BROWSER_ARRANGE,
             required=[BROWSER_ARRANGE / "Browser-Auto-Arrange.sh"],
         ),
+        Tool(
+            id="phone_manager",
+            name="Phone Manager",
+            subtitle="localhost:5056",
+            kind="daemon",
+            icon="phone-symbolic",
+            match="T phone_manager/app.py",
+            start_cmd=[str(PDF_PY), str(PHONE_MGR / "app.py")],
+            cwd=PHONE_MGR,
+            required=[PHONE_MGR / "app.py"],
+            url="http://127.0.0.1:5056",
+            env_extra={"MT_NO_BROWSER": "1"},
+        ),
+        Tool(
+            id="paydesk",
+            name="Pay Desk",
+            subtitle="localhost:8787",
+            kind="daemon",
+            icon="web-browser-symbolic",
+            match=" -m paydesk",
+            start_cmd=["bash", str(PAYDESK / "Run_Paydesk.sh")],
+            cwd=PAYDESK,
+            required=[PAYDESK / "Run_Paydesk.sh"],
+            url="http://127.0.0.1:8787",
+            env_extra={"PAYDESK_NO_BROWSER": "1"},
+        ),
     ]
     return tools
 
@@ -432,6 +467,7 @@ class ToolRow(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.tool = tool
         self._busy = False
+        self._busy_label = "Running…"
         self.add_css_class("card")
         self.set_margin_top(3)
         self.set_margin_bottom(3)
@@ -476,8 +512,9 @@ class ToolRow(Gtk.Box):
         SOUND.play("tap")
         open_log(self.tool)
 
-    def set_busy(self, busy: bool) -> None:
+    def set_busy(self, busy: bool, label: str = "Running…") -> None:
         self._busy = busy
+        self._busy_label = label
         self.refresh()
 
     def refresh(self) -> None:
@@ -490,7 +527,7 @@ class ToolRow(Gtk.Box):
             self.btn.set_sensitive(False)
             return
         if self._busy:
-            self.btn.set_label("Running…")
+            self.btn.set_label(self._busy_label)
             self.btn.add_css_class("btn-busy")
             self.btn.set_sensitive(False)
             return
@@ -520,20 +557,51 @@ class ToolRow(Gtk.Box):
 
             self.tool.run_oneshot(done)
             return
-        if self.tool.is_running():
+        # Use the label the user clicked, not a second process check.
+        # A fast second click used to start the app and then immediately stop it.
+        wants_stop = self.btn.get_label().startswith("●")
+        if wants_stop:
             SOUND.play("stop")
+            self.set_busy(True, "Stopping…")
             self.tool.stop()
+            GLib.timeout_add(250, self._settle, False, 12)
+            return
+        SOUND.play("run")
+        self.set_busy(True, "Starting…")
+        if self.tool.is_running():
+            self._open_page()
         else:
-            SOUND.play("run")
-            if not self.tool.is_running():
-                self.tool.start()
-        GLib.timeout_add(500, self.refresh)
+            self.tool.start()
+            if self.tool.url:
+                GLib.timeout_add(800, self._open_page)
+        GLib.timeout_add(250, self._settle, True, 12)
+
+    def _open_page(self) -> bool:
+        if self.tool.url:
+            try:
+                Gio.AppInfo.launch_default_for_uri(self.tool.url, None)
+            except GLib.Error:
+                subprocess.Popen(
+                    ["xdg-open", self.tool.url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+        return False
+
+    def _settle(self, want_running: bool, tries: int) -> bool:
+        running = self.tool.is_running()
+        if running == want_running or tries <= 0:
+            self.set_busy(False)
+            return False
+        GLib.timeout_add(250, self._settle, want_running, tries - 1)
+        return False
 
 
 class ToolsPanel(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app, title="Tools Panel")
-        self.set_default_size(440, 480)
+        self.set_default_size(440, 600)
         self.set_resizable(True)
 
         css = Gtk.CssProvider()
