@@ -486,10 +486,10 @@ class ToolRow(Gtk.Box):
         name = Gtk.Label(label=tool.name, xalign=0)
         name.add_css_class("row-name")
         sub_label = tool.subtitle if tool.available() else f"{tool.subtitle} · missing"
-        sub = Gtk.Label(label=sub_label, xalign=0)
-        sub.add_css_class("row-sub")
+        self.sub = Gtk.Label(label=sub_label, xalign=0)
+        self.sub.add_css_class("row-sub")
         text.append(name)
-        text.append(sub)
+        text.append(self.sub)
         self.append(text)
 
         self.btn = Gtk.Button()
@@ -522,10 +522,14 @@ class ToolRow(Gtk.Box):
         self.btn.remove_css_class("btn-running")
         self.btn.remove_css_class("btn-busy")
         if not self.tool.available():
+            self.sub.set_label(f"{self.tool.subtitle} · missing")
+            self.add_css_class("missing")
             self.btn.set_label("Missing")
             self.btn.add_css_class("btn-idle")
             self.btn.set_sensitive(False)
             return
+        self.sub.set_label(self.tool.subtitle)
+        self.remove_css_class("missing")
         if self._busy:
             self.btn.set_label(self._busy_label)
             self.btn.add_css_class("btn-busy")
