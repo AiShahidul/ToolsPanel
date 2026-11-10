@@ -8,9 +8,11 @@ import math
 import os
 import shutil
 import signal
+import socket
 import struct
 import subprocess
 import threading
+import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,6 +158,11 @@ window {
   font-size: 11px;
   color: #8a9096;
   margin-top: 8px;
+}
+.group-line {
+  min-height: 1px;
+  margin: 6px 8px;
+  background: rgba(255, 255, 255, 0.07);
 }
 .missing {
   opacity: 0.45;
@@ -389,6 +396,19 @@ def build_tools() -> list[Tool]:
             required=[PDF_UTIL / "folder_map_rename_web.py"],
         ),
         Tool(
+            id="phone_manager",
+            name="Phone Manager",
+            subtitle="localhost:5056",
+            kind="daemon",
+            icon="phone-symbolic",
+            match="T phone_manager/app.py",
+            start_cmd=[str(PDF_PY), str(PHONE_MGR / "app.py")],
+            cwd=PHONE_MGR,
+            required=[PHONE_MGR / "app.py"],
+            url="http://127.0.0.1:5056",
+            env_extra={"MT_NO_BROWSER": "1"},
+        ),
+        Tool(
             id="solver",
             name="IVAC Open Solver",
             subtitle="JS Solver 2.0 UI",
@@ -430,36 +450,44 @@ def build_tools() -> list[Tool]:
             required=[BROWSER_ARRANGE / "Browser-Auto-Arrange.sh"],
         ),
         Tool(
-            id="phone_manager",
-            name="Phone Manager",
-            subtitle="localhost:5056",
-            kind="daemon",
-            icon="phone-symbolic",
-            match="T phone_manager/app.py",
-            start_cmd=[str(PDF_PY), str(PHONE_MGR / "app.py")],
-            cwd=PHONE_MGR,
-            required=[PHONE_MGR / "app.py"],
-            url="http://127.0.0.1:5056",
-            env_extra={"MT_NO_BROWSER": "1"},
-        ),
-        Tool(
             id="browser_bot",
-            name="Browser bot",
+            name="Payment browser bot",
             subtitle="localhost:8787",
             kind="daemon",
             icon="web-browser-symbolic",
             match=" -m bot",
-            start_cmd=["bash", str(BROWSER_BOT / "Run_Browser_Bot.sh")],
+            start_cmd=["bash", str(BROWSER_BOT / "Run_Payment_Browser_Bot.sh")],
             cwd=BROWSER_BOT,
-            required=[BROWSER_BOT / "Run_Browser_Bot.sh"],
+            required=[BROWSER_BOT / "Run_Payment_Browser_Bot.sh"],
             url="http://127.0.0.1:8787",
-            env_extra={"BROWSER_BOT_NO_BROWSER": "1"},
+            env_extra={"PAYMENT_BROWSER_BOT_NO_BROWSER": "1"},
+        ),
+        Tool(
+            id="checkout_solver",
+            name="Checkout check",
+            subtitle="localhost:8771",
+            kind="daemon",
+            icon="system-run-symbolic",
+            match="checkout-solver/ui.py",
+            start_cmd=[
+                str(_python_for(BROWSER_BOT, ".venv", ".venv-linux")),
+                str(BROWSER_BOT / "checkout-solver" / "ui.py"),
+            ],
+            cwd=BROWSER_BOT / "checkout-solver",
+            required=[BROWSER_BOT / "checkout-solver" / "ui.py"],
+            url="http://127.0.0.1:8771",
+            env_extra={"CHECKOUT_NO_BROWSER": "1"},
         ),
     ]
     return tools
 
 
 TOOLS: list[Tool] = build_tools()
+GROUPS: list[list[str]] = [
+    ["pdf_mapper", "pdf_upload", "folder_rename", "phone_manager"],
+    ["solver", "restart_bot", "restart_panel", "browser_arrange"],
+    ["browser_bot", "checkout_solver"],
+]
 
 
 class ToolRow(Gtk.Box):
@@ -572,25 +600,52 @@ class ToolRow(Gtk.Box):
             return
         SOUND.play("run")
         self.set_busy(True, "Starting…")
-        if self.tool.is_running():
-            self._open_page()
-        else:
+        if not self.tool.is_running():
             self.tool.start()
-            if self.tool.url:
-                GLib.timeout_add(800, self._open_page)
+        # Open before this click returns, so the browser is allowed to the front.
+        if self.tool.url:
+            self._wait_until_up()
+            self._open_page()
         GLib.timeout_add(250, self._settle, True, 12)
 
-    def _open_page(self) -> bool:
-        if self.tool.url:
+    def _wait_until_up(self) -> None:
+        if not self.tool.url:
+            return
+        host = "127.0.0.1"
+        port = 80
+        rest = self.tool.url.split("://", 1)[-1]
+        hostport = rest.split("/", 1)[0]
+        if hostport.startswith("["):
+            host = hostport.split("]")[0][1:]
+            if "]:" in hostport:
+                port = int(hostport.rsplit(":", 1)[-1])
+        elif ":" in hostport:
+            host, port_text = hostport.rsplit(":", 1)
+            port = int(port_text)
+        else:
+            host = hostport
+        deadline = time.time() + 2.5
+        while time.time() < deadline:
             try:
-                Gio.AppInfo.launch_default_for_uri(self.tool.url, None)
-            except GLib.Error:
-                subprocess.Popen(
-                    ["xdg-open", self.tool.url],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
+                with socket.create_connection((host, port), 0.2):
+                    return
+            except OSError:
+                time.sleep(0.05)
+
+    def _open_page(self) -> bool:
+        if not self.tool.url:
+            return False
+        window = self.get_root()
+        parent = window if isinstance(window, Gtk.Window) else None
+        try:
+            Gtk.UriLauncher.new(self.tool.url).launch(parent, None, None)
+        except GLib.Error:
+            subprocess.Popen(
+                ["xdg-open", self.tool.url],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         return False
 
     def _settle(self, want_running: bool, tries: int) -> bool:
@@ -639,10 +694,16 @@ class ToolsPanel(Adw.ApplicationWindow):
         root.set_margin_end(16)
 
         self.rows: list[ToolRow] = []
-        for tool in TOOLS:
-            row = ToolRow(tool, self._open_log)
-            self.rows.append(row)
-            root.append(row)
+        by_id = {tool.id: tool for tool in TOOLS}
+        for index, ids in enumerate(GROUPS):
+            if index:
+                line = Gtk.Box()
+                line.add_css_class("group-line")
+                root.append(line)
+            for tool_id in ids:
+                row = ToolRow(by_id[tool_id], self._open_log)
+                self.rows.append(row)
+                root.append(row)
 
         foot = Gtk.Label(
             label="Green = Running · Stopped / Run stays neutral · click to toggle",
