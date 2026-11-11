@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <!-- DG epay circular mark — brand red on transparent -->
+  <g stroke="#E30613" stroke-width="14" stroke-linecap="butt" stroke-linejoin="miter" fill="none">
+    <!-- outer ring open at top-right -->
+    <path d="M 96 28
+             A 42 42 0 1 0 104 48"/>
+    <!-- inner arc (open toward right/center) -->
+    <path d="M 78 46
+             A 22 22 0 1 0 86 58"/>
+    <!-- stem + inward hook from the gap -->
+    <path d="M 96 28 L 96 64 L 72 64"/>
+  </g>
+</svg>

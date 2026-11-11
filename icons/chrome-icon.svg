@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 745 745" width="128" height="128">
+<defs>
+    <style>
+      .cls-1 {
+        fill: none;
+      }
+
+      .cls-1, .cls-2, .cls-3, .cls-4, .cls-5, .cls-6, .cls-7 {
+        stroke-width: 0px;
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-3 {
+        fill: #5f6368;
+      }
+
+      .cls-4 {
+        fill: #1a73e8;
+      }
+
+      .cls-5 {
+        fill: url(#linear-gradient-2);
+      }
+
+      .cls-6 {
+        fill: url(#linear-gradient-3);
+      }
+
+      .cls-7 {
+        fill: #fff;
+      }
+    </style>
+    <linearGradient id="linear-gradient" x1="-1339.94" y1="561.18" x2="-1136.64" y2="561.18" gradientTransform="translate(3674.6 1751.58) scale(2.67 -2.67)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d93025"/>
+      <stop offset="1" stop-color="#ea4335"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="-2780.04" y1="53.92" x2="-2576.72" y2="53.92" gradientTransform="translate(-3175.83 -5826) rotate(-120) scale(2.67 -2.67)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1e8e3e"/>
+      <stop offset="1" stop-color="#34a853"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-3" x1="-2493.08" y1="1589.86" x2="-2289.77" y2="1589.86" gradientTransform="translate(-6396.89 3852.91) rotate(120) scale(2.67 -2.67)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fbbc04"/>
+      <stop offset="1" stop-color="#fcc934"/>
+    </linearGradient>
+  </defs>
+<g id="ICON">
+    <g>
+      <rect class="cls-1" x="31.04" y="31.04" width="682.92" height="682.92"/>
+      <g>
+        <path class="cls-2" d="M101.43,215.93l43.14,131.64,92.41,103.15,135.52-234.72,271.07-.04c-54.14-93.55-155.26-156.47-271.07-156.47S155.57,122.42,101.43,215.93Z"/>
+        <path class="cls-5" d="M372.46,685.5l92.41-103.18,43.11-131.6H236.95L101.4,215.96c-53.92,93.65-57.87,212.7.04,313,57.94,100.3,163.01,156.43,271.03,156.54Z"/>
+        <path class="cls-6" d="M643.57,216h-271.07l135.52,234.75-135.52,234.75c108.06-.11,213.13-56.23,271.03-156.54,57.91-100.3,53.96-219.35.04-312.97Z"/>
+        <ellipse class="cls-7" cx="372.5" cy="372.46" rx="156.47" ry="156.5"/>
+        <ellipse class="cls-4" cx="372.5" cy="372.46" rx="127.12" ry="127.16"/>
+      </g>
+    </g>
+  </g>
+</svg>

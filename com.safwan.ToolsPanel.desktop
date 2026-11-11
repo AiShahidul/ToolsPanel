@@ -2,11 +2,12 @@
 Version=1.0
 Type=Application
 Name=Tools Panel
-Comment=Start / stop desktop tools without a terminal
+Comment=Start / stop desktop tools without a terminal — stays in top bar
 Exec=/usr/bin/python3 "/home/aishahidul/GitHub Repository/ToolsPanel/tools_panel.py"
 Path=/home/aishahidul/GitHub Repository/ToolsPanel
-Icon=applications-system
+Icon=com.safwan.ToolsPanel
 Terminal=false
-Categories=Utility;
+Categories=Utility;System;
 StartupNotify=true
 StartupWMClass=com.safwan.ToolsPanel
+SingleMainWindow=true

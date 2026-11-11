@@ -11,8 +11,10 @@ import signal
 import socket
 import struct
 import subprocess
+import sys
 import threading
 import time
+import traceback
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,12 +24,63 @@ import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, GLib, Gtk, Gio  # noqa: E402
+from gi.repository import Adw, GLib, Gtk, Gio, Pango  # noqa: E402
 
 HOME = Path.home()
+APP_ROOT = Path(__file__).resolve().parent
+APP_ID = "com.safwan.ToolsPanel"
+
+
+def _hand_cursor(widget: Gtk.Widget) -> None:
+    """Show the hand pointer on clickable controls."""
+    try:
+        widget.set_cursor_from_name("pointer")
+    except Exception:
+        pass
 CACHE = HOME / ".cache" / "tools-panel"
 CACHE.mkdir(parents=True, exist_ok=True)
 SOUND_DIR = CACHE / "sounds"
+CRASH_LOG = CACHE / "crash.log"
+ICON_THEME_DIR = APP_ROOT / "icons"
+ICON_NAME = APP_ID
+
+
+def _tool_icon_widget(icon: str) -> Gtk.Widget:
+    """Theme icon or brand file (png/svg) centered on a readable tile."""
+    path = Path(icon)
+    if not path.is_absolute():
+        cand = ICON_THEME_DIR / icon
+        if cand.is_file():
+            path = cand
+    is_brand = path.is_file() and path.suffix.lower() in {
+        ".png",
+        ".svg",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+    }
+    if is_brand:
+        image = Gtk.Image.new_from_file(str(path))
+        image.set_pixel_size(26)
+    else:
+        image = Gtk.Image.new_from_icon_name(icon)
+        image.set_pixel_size(20)
+
+    image.set_halign(Gtk.Align.CENTER)
+    image.set_valign(Gtk.Align.CENTER)
+
+    # CenterBox keeps the logo in the middle of the square tile.
+    tile = Gtk.CenterBox()
+    tile.add_css_class("tool-icon")
+    if is_brand:
+        tile.add_css_class("tool-icon-brand")
+    tile.set_halign(Gtk.Align.CENTER)
+    tile.set_valign(Gtk.Align.CENTER)
+    tile.set_hexpand(False)
+    tile.set_vexpand(False)
+    tile.set_size_request(38, 38)
+    tile.set_center_widget(image)
+    return tile
 
 
 def _first_existing(*candidates: Path) -> Path | None:
@@ -93,8 +146,12 @@ window {
   background: #26292f;
   border-radius: 9px;
   color: #9db4ff;
-  min-width: 34px;
-  min-height: 34px;
+  min-width: 38px;
+  min-height: 38px;
+}
+.tool-icon-brand {
+  background: #f1f3f5;
+  color: transparent;
 }
 .row-name {
   font-size: 13px;
@@ -104,6 +161,9 @@ window {
 .row-sub {
   font-size: 11px;
   color: #9aa0a6;
+}
+button, .btn-status, .btn-log, .btn-mute, .group-header {
+  cursor: pointer;
 }
 .btn-status {
   min-width: 104px;
@@ -163,6 +223,51 @@ window {
   min-height: 1px;
   margin: 6px 8px;
   background: rgba(255, 255, 255, 0.07);
+}
+.tool-group {
+  border-radius: 14px;
+  padding: 6px 8px 8px 8px;
+  border: 1px solid transparent;
+}
+.group-payment {
+  background: rgba(56, 120, 200, 0.14);
+  border-color: rgba(110, 168, 255, 0.22);
+}
+.group-ivac {
+  background: rgba(180, 120, 40, 0.14);
+  border-color: rgba(240, 160, 34, 0.22);
+}
+.group-files {
+  background: rgba(60, 130, 90, 0.14);
+  border-color: rgba(90, 180, 120, 0.22);
+}
+.group-header {
+  padding: 2px 4px 4px 4px;
+  border-radius: 10px;
+  background: transparent;
+  border: none;
+  color: #d7dde3;
+}
+.group-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.group-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #d7dde3;
+}
+.group-meta {
+  font-size: 11px;
+  color: #9aa0a6;
+}
+.group-chevron {
+  color: #9aa0a6;
+  min-width: 28px;
+  min-height: 28px;
+}
+.group-body {
+  margin-top: 2px;
 }
 .missing {
   opacity: 0.45;
@@ -444,17 +549,17 @@ def build_tools() -> list[Tool]:
             name="Browser Auto Arrange",
             subtitle="Chrome×7 + Edge×7",
             kind="oneshot",
-            icon="web-browser-symbolic",
+            icon="chrome-icon.svg",
             start_cmd=["bash", str(BROWSER_ARRANGE / "Browser-Auto-Arrange.sh")],
             cwd=BROWSER_ARRANGE,
             required=[BROWSER_ARRANGE / "Browser-Auto-Arrange.sh"],
         ),
         Tool(
             id="browser_bot",
-            name="Payment browser bot",
+            name="Payment Browser Bot",
             subtitle="localhost:8787",
             kind="daemon",
-            icon="web-browser-symbolic",
+            icon="playwright-logo.svg",
             match=" -m bot",
             start_cmd=["bash", str(BROWSER_BOT / "Run_Payment_Browser_Bot.sh")],
             cwd=BROWSER_BOT,
@@ -464,10 +569,10 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             id="checkout_solver",
-            name="Checkout check",
+            name="Checkout Checker",
             subtitle="localhost:8771",
             kind="daemon",
-            icon="system-run-symbolic",
+            icon="dgepay-mark.png",
             match="checkout-solver/ui.py",
             start_cmd=[
                 str(_python_for(BROWSER_BOT, ".venv", ".venv-linux")),
@@ -483,11 +588,156 @@ def build_tools() -> list[Tool]:
 
 
 TOOLS: list[Tool] = build_tools()
-GROUPS: list[list[str]] = [
-    ["pdf_mapper", "pdf_upload", "folder_rename", "phone_manager"],
-    ["solver", "restart_bot", "restart_panel", "browser_arrange"],
-    ["browser_bot", "checkout_solver"],
+
+
+@dataclass(frozen=True)
+class ToolGroup:
+    id: str
+    title: str
+    style: str
+    tool_ids: list[str]
+    collapsible: bool = True
+    default_expanded: bool = True
+
+
+# Order: payment browsers on top, IVAC in the middle, PDF/phone last.
+GROUPS: list[ToolGroup] = [
+    ToolGroup(
+        id="payment",
+        title="Payment browsers",
+        style="group-payment",
+        tool_ids=["browser_arrange", "browser_bot", "checkout_solver"],
+        collapsible=False,
+        default_expanded=True,
+    ),
+    ToolGroup(
+        id="ivac",
+        title="IVAC / Solver",
+        style="group-ivac",
+        tool_ids=["solver", "restart_bot", "restart_panel"],
+        collapsible=False,
+        default_expanded=True,
+    ),
+    ToolGroup(
+        id="files",
+        title="PDF / Phone",
+        style="group-files",
+        tool_ids=["pdf_mapper", "pdf_upload", "folder_rename", "phone_manager"],
+        collapsible=True,
+        default_expanded=False,
+    ),
 ]
+
+
+def _load_group_state() -> dict[str, bool]:
+    path = CACHE / "group_state.json"
+    defaults = {g.id: g.default_expanded for g in GROUPS}
+    if not path.is_file():
+        return defaults
+    try:
+        import json
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return defaults
+        state = dict(defaults)
+        for group in GROUPS:
+            if not group.collapsible:
+                state[group.id] = True
+                continue
+            if group.id in data:
+                state[group.id] = bool(data[group.id])
+        return state
+    except (OSError, ValueError, TypeError):
+        return defaults
+
+
+def _save_group_state(state: dict[str, bool]) -> None:
+    path = CACHE / "group_state.json"
+    try:
+        import json
+
+        # Only persist collapsible groups
+        collapsible_ids = {g.id for g in GROUPS if g.collapsible}
+        slim = {k: bool(v) for k, v in state.items() if k in collapsible_ids}
+        path.write_text(json.dumps(slim, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+class ToolGroupBox(Gtk.Box):
+    def __init__(
+        self,
+        group: ToolGroup,
+        tools: list[Tool],
+        open_log: Callable[[Tool], None],
+        expanded: bool,
+        on_toggle: Callable[[str, bool], None],
+    ):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.group = group
+        self._expanded = True if not group.collapsible else expanded
+        self._on_toggle = on_toggle
+        self.rows: list[ToolRow] = []
+        self.add_css_class("tool-group")
+        self.add_css_class(group.style)
+
+        header_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        header_row.set_hexpand(True)
+
+        title = Gtk.Label(label=group.title, xalign=0)
+        title.add_css_class("group-title")
+        title.set_hexpand(True)
+        header_row.append(title)
+
+        self.chevron = Gtk.Image()
+        self.chevron.add_css_class("group-chevron")
+        if group.collapsible:
+            header_row.append(self.chevron)
+
+        self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.body.add_css_class("group-body")
+        for tool in tools:
+            row = ToolRow(tool, open_log)
+            self.rows.append(row)
+            self.body.append(row)
+
+        if group.collapsible:
+            header = Gtk.Button()
+            header.add_css_class("group-header")
+            header.add_css_class("flat")
+            header.set_hexpand(True)
+            header.set_tooltip_text("Show / hide this group")
+            header.connect("clicked", self._toggle)
+            header.set_child(header_row)
+            _hand_cursor(header)
+            self.append(header)
+        else:
+            header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            header.add_css_class("group-header")
+            header.set_hexpand(True)
+            header.append(header_row)
+            self.append(header)
+
+        # Inline with the other groups (not a popover). Collapse leaves empty
+        # space below on Wayland — that is intentional / acceptable.
+        self.append(self.body)
+        self._apply_expanded()
+
+    def _apply_expanded(self) -> None:
+        self.body.set_visible(self._expanded)
+        if self.group.collapsible:
+            self.chevron.set_from_icon_name(
+                "pan-down-symbolic" if self._expanded else "pan-end-symbolic"
+            )
+
+    def _toggle(self, *_args) -> None:
+        if not self.group.collapsible:
+            return
+        SOUND.play("tap")
+        self._expanded = not self._expanded
+        self._apply_expanded()
+        self._on_toggle(self.group.id, self._expanded)
 
 
 class ToolRow(Gtk.Box):
@@ -502,20 +752,26 @@ class ToolRow(Gtk.Box):
         if not tool.available():
             self.add_css_class("missing")
 
-        icon = Gtk.Image.new_from_icon_name(tool.icon)
-        icon.set_pixel_size(18)
-        icon.add_css_class("tool-icon")
+        self.set_hexpand(True)
+        self.set_halign(Gtk.Align.FILL)
+
+        icon = _tool_icon_widget(tool.icon)
         icon.set_valign(Gtk.Align.CENTER)
         self.append(icon)
 
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         text.set_hexpand(True)
+        text.set_halign(Gtk.Align.FILL)
         text.set_valign(Gtk.Align.CENTER)
         name = Gtk.Label(label=tool.name, xalign=0)
         name.add_css_class("row-name")
+        name.set_ellipsize(Pango.EllipsizeMode.END)
+        name.set_hexpand(True)
         sub_label = tool.subtitle if tool.available() else f"{tool.subtitle} · missing"
         self.sub = Gtk.Label(label=sub_label, xalign=0)
         self.sub.add_css_class("row-sub")
+        self.sub.set_ellipsize(Pango.EllipsizeMode.END)
+        self.sub.set_hexpand(True)
         text.append(name)
         text.append(self.sub)
         self.append(text)
@@ -524,6 +780,7 @@ class ToolRow(Gtk.Box):
         self.btn.add_css_class("btn-status")
         self.btn.set_valign(Gtk.Align.CENTER)
         self.btn.connect("clicked", self._on_click)
+        _hand_cursor(self.btn)
         self.append(self.btn)
 
         log_btn = Gtk.Button()
@@ -532,6 +789,7 @@ class ToolRow(Gtk.Box):
         log_btn.add_css_class("btn-log")
         log_btn.set_valign(Gtk.Align.CENTER)
         log_btn.connect("clicked", self._on_log, open_log)
+        _hand_cursor(log_btn)
         self.append(log_btn)
 
         self.refresh()
@@ -657,11 +915,253 @@ class ToolRow(Gtk.Box):
         return False
 
 
+class StatusNotifierTray:
+    """Top-bar icon via StatusNotifierItem (ubuntu-appindicators). Fail-soft."""
+
+    OBJECT_PATH = "/StatusNotifierItem"
+    WATCHER = "org.kde.StatusNotifierWatcher"
+    WATCHER_PATH = "/StatusNotifierWatcher"
+    WATCHER_IFACE = "org.kde.StatusNotifierWatcher"
+    ITEM_IFACE = "org.kde.StatusNotifierItem"
+
+    INTROSPECTION_XML = f"""
+    <node>
+      <interface name="{ITEM_IFACE}">
+        <method name="Activate">
+          <arg type="i" name="x" direction="in"/>
+          <arg type="i" name="y" direction="in"/>
+        </method>
+        <method name="SecondaryActivate">
+          <arg type="i" name="x" direction="in"/>
+          <arg type="i" name="y" direction="in"/>
+        </method>
+        <method name="ContextMenu">
+          <arg type="i" name="x" direction="in"/>
+          <arg type="i" name="y" direction="in"/>
+        </method>
+        <method name="Scroll">
+          <arg type="i" name="delta" direction="in"/>
+          <arg type="s" name="orientation" direction="in"/>
+        </method>
+        <property name="Category" type="s" access="read"/>
+        <property name="Id" type="s" access="read"/>
+        <property name="Title" type="s" access="read"/>
+        <property name="Status" type="s" access="read"/>
+        <property name="WindowId" type="u" access="read"/>
+        <property name="IconName" type="s" access="read"/>
+        <property name="IconThemePath" type="s" access="read"/>
+        <property name="IconPixmap" type="a(iiay)" access="read"/>
+        <property name="ItemIsMenu" type="b" access="read"/>
+        <property name="Menu" type="o" access="read"/>
+        <property name="ToolTip" type="(sa(iiay)ss)" access="read"/>
+        <signal name="NewTitle"/>
+        <signal name="NewIcon"/>
+        <signal name="NewStatus">
+          <arg type="s" name="status"/>
+        </signal>
+        <signal name="NewToolTip"/>
+      </interface>
+    </node>
+    """
+
+    def __init__(self, app: "App"):
+        self.app = app
+        self._conn: Gio.DBusConnection | None = None
+        self._reg_id = 0
+        self._watcher_id = 0
+        self._ok = False
+        # Do NOT point IconThemePath at a folder with spaces — ubuntu-appindicators
+        # fails lookup there and then hides the tray icon entirely.
+        # Icons live in ~/.local/share/icons (no spaces) + IconPixmap backup.
+        local_icon = HOME / ".local/share/icons/hicolor/22x22/apps" / f"{ICON_NAME}.png"
+        self._icon_name = ICON_NAME if local_icon.is_file() else "applications-system"
+        self._icon_theme = ""
+        self._icon_pixmap = self._build_icon_pixmap()
+        try:
+            self._conn = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            node = Gio.DBusNodeInfo.new_for_xml(self.INTROSPECTION_XML)
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                self._reg_id = self._conn.register_object(
+                    self.OBJECT_PATH,
+                    node.interfaces[0],
+                    self._on_method,
+                    self._on_get_property,
+                    None,
+                )
+            self._watcher_id = Gio.bus_watch_name_on_connection(
+                self._conn,
+                self.WATCHER,
+                Gio.BusNameWatcherFlags.NONE,
+                self._on_watcher_appeared,
+                self._on_watcher_vanished,
+            )
+            self._ok = True
+        except Exception:
+            self._log_fail("tray init")
+            self.unregister()
+
+    @staticmethod
+    def _log_fail(where: str) -> None:
+        try:
+            with CRASH_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(f"[tray:{where}]\n{traceback.format_exc()}\n")
+        except OSError:
+            pass
+
+    def _on_watcher_appeared(self, conn: Gio.DBusConnection, *_args) -> None:
+        try:
+            conn.call_sync(
+                self.WATCHER,
+                self.WATCHER_PATH,
+                self.WATCHER_IFACE,
+                "RegisterStatusNotifierItem",
+                GLib.Variant("(s)", (self.OBJECT_PATH,)),
+                None,
+                Gio.DBusCallFlags.NONE,
+                3000,
+                None,
+            )
+        except Exception:
+            try:
+                conn.call_sync(
+                    self.WATCHER,
+                    self.WATCHER_PATH,
+                    self.WATCHER_IFACE,
+                    "RegisterStatusNotifierItem",
+                    GLib.Variant("(s)", (conn.get_unique_name(),)),
+                    None,
+                    Gio.DBusCallFlags.NONE,
+                    3000,
+                    None,
+                )
+            except Exception:
+                self._log_fail("register")
+
+    def _on_watcher_vanished(self, *_args) -> None:
+        return
+
+    def _on_method(self, _conn, _sender, _path, _iface, method, _params, invocation):
+        try:
+            if method in ("Activate", "SecondaryActivate", "ContextMenu"):
+                GLib.idle_add(self.app.toggle_window)
+            invocation.return_value(None)
+        except Exception:
+            self._log_fail(f"method:{method}")
+            try:
+                invocation.return_value(None)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _build_icon_pixmap() -> GLib.Variant:
+        """ARGB pixmap so the host can draw us even if theme lookup fails."""
+        try:
+            gi.require_version("GdkPixbuf", "2.0")
+            from gi.repository import GdkPixbuf  # noqa: WPS433
+
+            candidates = [
+                HOME / ".local/share/icons/hicolor/22x22/apps" / f"{ICON_NAME}.png",
+                HOME / ".local/share/icons/hicolor/24x24/apps" / f"{ICON_NAME}.png",
+                ICON_THEME_DIR / "hicolor/22x22/apps" / f"{ICON_NAME}.png",
+            ]
+            path = next((p for p in candidates if p.is_file()), None)
+            if path is None:
+                return GLib.Variant("a(iiay)", [])
+            pb = GdkPixbuf.Pixbuf.new_from_file_at_size(str(path), 22, 22)
+            w, h = pb.get_width(), pb.get_height()
+            rowstride = pb.get_rowstride()
+            n_ch = pb.get_n_channels()
+            pixels = pb.get_pixels()
+            out = bytearray(w * h * 4)
+            i = 0
+            for y in range(h):
+                row = y * rowstride
+                for x in range(w):
+                    p = row + x * n_ch
+                    r = pixels[p]
+                    g = pixels[p + 1]
+                    b = pixels[p + 2]
+                    a = pixels[p + 3] if n_ch >= 4 else 255
+                    # Network byte order ARGB
+                    out[i : i + 4] = bytes((a, r, g, b))
+                    i += 4
+            return GLib.Variant("a(iiay)", [(w, h, bytes(out))])
+        except Exception:
+            return GLib.Variant("a(iiay)", [])
+
+    def _tooltip_variant(self) -> GLib.Variant:
+        # GVariant text form avoids PyGObject tuple packing bugs for a(iiay).
+        text = (
+            f'("{self._icon_name}", @a(iiay) [], "Tools Panel", '
+            f'"Click to show / hide")'
+        )
+        return GLib.Variant.parse(
+            GLib.VariantType.new("(sa(iiay)ss)"),
+            text,
+            None,
+            None,
+        )
+
+    def _on_get_property(self, _conn, _sender, _path, _iface, name):
+        try:
+            if name == "Category":
+                return GLib.Variant("s", "ApplicationStatus")
+            if name == "Id":
+                return GLib.Variant("s", APP_ID)
+            if name == "Title":
+                return GLib.Variant("s", "Tools Panel")
+            if name == "Status":
+                return GLib.Variant("s", "Active")
+            if name == "WindowId":
+                return GLib.Variant("u", 0)
+            if name == "IconName":
+                return GLib.Variant("s", self._icon_name)
+            if name == "IconThemePath":
+                return GLib.Variant("s", self._icon_theme)
+            if name == "IconPixmap":
+                return self._icon_pixmap
+            if name == "ItemIsMenu":
+                return GLib.Variant("b", False)
+            if name == "Menu":
+                return GLib.Variant("o", "/")
+            if name == "ToolTip":
+                return self._tooltip_variant()
+            return GLib.Variant("s", "")
+        except Exception:
+            self._log_fail(f"property:{name}")
+            return GLib.Variant("s", "")
+
+    def unregister(self) -> None:
+        conn = self._conn
+        if conn is None:
+            return
+        try:
+            if self._watcher_id:
+                Gio.bus_unwatch_name(self._watcher_id)
+        except Exception:
+            pass
+        try:
+            if self._reg_id:
+                conn.unregister_object(self._reg_id)
+        except Exception:
+            pass
+        self._watcher_id = 0
+        self._reg_id = 0
+        self._conn = None
+        self._ok = False
+
+
 class ToolsPanel(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app, title="Tools Panel")
-        self.set_default_size(440, 600)
-        self.set_resizable(True)
+        # PDF/Phone expands inline. Wayland may leave empty space after collapse —
+        # that is fine. Grow on expand so tools are not clipped.
+        self.set_default_size(465, -1)
+        self.set_resizable(False)
+        self.set_hide_on_close(True)
 
         css = Gtk.CssProvider()
         css.load_from_data(CSS.encode("utf-8"))
@@ -672,12 +1172,16 @@ class ToolsPanel(Adw.ApplicationWindow):
         )
 
         header = Adw.HeaderBar()
-        header.set_title_widget(
-            Adw.WindowTitle(
-                title="Tools Panel",
-                subtitle="Desktop · start / stop without a terminal",
-            )
-        )
+        header.set_title_widget(Adw.WindowTitle(title="Tools Panel"))
+        self._header = header
+
+        quit_btn = Gtk.Button()
+        quit_btn.set_icon_name("application-exit-symbolic")
+        quit_btn.set_tooltip_text("Quit Tools Panel")
+        quit_btn.add_css_class("flat")
+        quit_btn.connect("clicked", lambda *_: app.activate_action("quit", None))
+        _hand_cursor(quit_btn)
+        header.pack_start(quit_btn)
 
         self.mute_btn = Gtk.ToggleButton()
         self.mute_btn.set_icon_name("audio-volume-high-symbolic")
@@ -685,32 +1189,35 @@ class ToolsPanel(Adw.ApplicationWindow):
         self.mute_btn.add_css_class("btn-mute")
         self.mute_btn.add_css_class("flat")
         self.mute_btn.connect("toggled", self._on_mute)
+        _hand_cursor(self.mute_btn)
         header.pack_end(self.mute_btn)
 
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         root.set_margin_top(10)
-        root.set_margin_bottom(14)
-        root.set_margin_start(16)
-        root.set_margin_end(16)
+        root.set_margin_bottom(8)
+        root.set_margin_start(12)
+        root.set_margin_end(12)
+        root.set_vexpand(False)
+        root.set_valign(Gtk.Align.START)
+        self._content_root = root
 
         self.rows: list[ToolRow] = []
+        self._group_state = _load_group_state()
         by_id = {tool.id: tool for tool in TOOLS}
-        for index, ids in enumerate(GROUPS):
-            if index:
-                line = Gtk.Box()
-                line.add_css_class("group-line")
-                root.append(line)
-            for tool_id in ids:
-                row = ToolRow(by_id[tool_id], self._open_log)
-                self.rows.append(row)
-                root.append(row)
-
-        foot = Gtk.Label(
-            label="Green = Running · Stopped / Run stays neutral · click to toggle",
-            xalign=0,
-        )
-        foot.add_css_class("footer")
-        root.append(foot)
+        for group in GROUPS:
+            tools = [by_id[tool_id] for tool_id in group.tool_ids if tool_id in by_id]
+            expanded = True if not group.collapsible else self._group_state.get(
+                group.id, group.default_expanded
+            )
+            box = ToolGroupBox(
+                group,
+                tools,
+                self._open_log,
+                expanded=expanded,
+                on_toggle=self._on_group_toggle,
+            )
+            self.rows.extend(box.rows)
+            root.append(box)
 
         view = Adw.ToolbarView()
         view.add_top_bar(header)
@@ -718,6 +1225,22 @@ class ToolsPanel(Adw.ApplicationWindow):
         self.set_content(view)
 
         GLib.timeout_add_seconds(2, self._tick)
+
+    def _grow_for_content(self) -> bool:
+        """Only grow the window when expanding — never shrink (empty gap OK)."""
+        width = self.get_width()
+        if width <= 1:
+            width = 455
+        root = self._content_root
+        header = self._header
+        if root is None or header is None:
+            return False
+        _mn, root_h = root.measure(Gtk.Orientation.VERTICAL, width)
+        _mn, header_h = header.measure(Gtk.Orientation.VERTICAL, width)
+        need = int(root_h + header_h)
+        if need > 1 and self.get_height() < need:
+            self.set_default_size(width, need)
+        return False
 
     def _on_mute(self, btn: Gtk.ToggleButton) -> None:
         muted = btn.get_active()
@@ -728,6 +1251,12 @@ class ToolsPanel(Adw.ApplicationWindow):
         btn.set_tooltip_text("Unmute click sound" if muted else "Mute click sound")
         if not muted:
             SOUND.play("tap")
+
+    def _on_group_toggle(self, group_id: str, expanded: bool) -> None:
+        self._group_state[group_id] = expanded
+        _save_group_state(self._group_state)
+        if expanded:
+            GLib.timeout_add(16, self._grow_for_content)
 
     def _tick(self) -> bool:
         for row in self.rows:
@@ -745,19 +1274,86 @@ class ToolsPanel(Adw.ApplicationWindow):
 class App(Adw.Application):
     def __init__(self):
         super().__init__(
-            application_id="com.safwan.ToolsPanel",
+            application_id=APP_ID,
             flags=Gio.ApplicationFlags.FLAGS_NONE,
         )
+        self._tray: StatusNotifierTray | None = None
+        self._holding = False
+
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        quit_action = Gio.SimpleAction.new("quit", None)
+        quit_action.connect("activate", self._on_quit)
+        self.add_action(quit_action)
+        toggle_action = Gio.SimpleAction.new("toggle", None)
+        toggle_action.connect("activate", lambda *_: self.toggle_window())
+        self.add_action(toggle_action)
+        # Stay alive when the window is hidden (tray click can bring it back).
+        self.hold()
+        self._holding = True
 
     def do_activate(self):
         win = self.props.active_window
         if not win:
             win = ToolsPanel(self)
+        if self._tray is None:
+            self._tray = StatusNotifierTray(self)
         win.present()
+
+    def toggle_window(self) -> None:
+        try:
+            win = self.props.active_window
+            if win is None:
+                self.activate()
+                return
+            if win.is_visible():
+                win.set_visible(False)
+            else:
+                win.present()
+        except Exception:
+            try:
+                with CRASH_LOG.open("a", encoding="utf-8") as fh:
+                    fh.write(f"[toggle]\n{traceback.format_exc()}\n")
+            except OSError:
+                pass
+            self.activate()
+
+    def _on_quit(self, *_args) -> None:
+        try:
+            if self._tray is not None:
+                self._tray.unregister()
+                self._tray = None
+        except Exception:
+            pass
+        for win in list(self.get_windows()):
+            try:
+                win.set_hide_on_close(False)
+                win.destroy()
+            except Exception:
+                pass
+        if self._holding:
+            self.release()
+            self._holding = False
+        self.quit()
+
+
+def _install_excepthook() -> None:
+    def _hook(exc_type, exc, tb) -> None:
+        try:
+            CRASH_LOG.write_text(
+                "".join(traceback.format_exception(exc_type, exc, tb)),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
 
 
 def main() -> int:
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    _install_excepthook()
     return App().run(None)
 
 
