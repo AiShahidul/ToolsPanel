@@ -31,6 +31,14 @@ APP_ROOT = Path(__file__).resolve().parent
 APP_ID = "com.safwan.ToolsPanel"
 
 
+def _natural_height(widget: Gtk.Widget, width: int) -> int:
+    """GTK 4 measure() is (min, natural) or four values with baselines."""
+    measured = widget.measure(Gtk.Orientation.VERTICAL, width)
+    if isinstance(measured, tuple) and len(measured) >= 2:
+        return int(measured[1])
+    return 0
+
+
 def _hand_cursor(widget: Gtk.Widget) -> None:
     """Show the hand pointer on clickable controls."""
     try:
@@ -376,11 +384,24 @@ def _pgrep(match: str) -> list[int]:
 
 
 def _kill_match(match: str) -> None:
+    # Only the processes that are up right now. A later Start must not be killed.
+    pids = _pgrep(match)
     subprocess.run(["pkill", "-f", match], check=False)
-    GLib.timeout_add(
-        400,
-        lambda: subprocess.run(["pkill", "-9", "-f", match], check=False) or False,
-    )
+
+    def _force() -> bool:
+        for pid in pids:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        return False
+
+    if pids:
+        GLib.timeout_add(400, _force)
 
 
 @dataclass
@@ -858,52 +879,66 @@ class ToolRow(Gtk.Box):
             return
         SOUND.play("run")
         self.set_busy(True, "Starting…")
-        if not self.tool.is_running():
-            self.tool.start()
-        # Open before this click returns, so the browser is allowed to the front.
-        if self.tool.url:
-            self._wait_until_up()
-            self._open_page()
-        GLib.timeout_add(250, self._settle, True, 12)
+        try:
+            if not self.tool.is_running():
+                self.tool.start()
+        finally:
+            # Settle even if opening the page fails. A blocking browser launch
+            # used to leave this button on "Starting…" for good.
+            GLib.timeout_add(250, self._settle, True, 12)
+            if self.tool.url:
+                GLib.timeout_add(200, self._open_when_ready, 25)
 
-    def _wait_until_up(self) -> None:
+    def _endpoint(self) -> tuple[str, int] | None:
         if not self.tool.url:
-            return
+            return None
         host = "127.0.0.1"
         port = 80
         rest = self.tool.url.split("://", 1)[-1]
         hostport = rest.split("/", 1)[0]
-        if hostport.startswith("["):
-            host = hostport.split("]")[0][1:]
-            if "]:" in hostport:
-                port = int(hostport.rsplit(":", 1)[-1])
-        elif ":" in hostport:
-            host, port_text = hostport.rsplit(":", 1)
-            port = int(port_text)
-        else:
-            host = hostport
-        deadline = time.time() + 2.5
-        while time.time() < deadline:
-            try:
-                with socket.create_connection((host, port), 0.2):
-                    return
-            except OSError:
-                time.sleep(0.05)
+        try:
+            if hostport.startswith("["):
+                host = hostport.split("]")[0][1:]
+                if "]:" in hostport:
+                    port = int(hostport.rsplit(":", 1)[-1])
+            elif ":" in hostport:
+                host, port_text = hostport.rsplit(":", 1)
+                port = int(port_text)
+            else:
+                host = hostport
+        except ValueError:
+            return None
+        return host, port
+
+    def _port_open(self) -> bool:
+        endpoint = self._endpoint()
+        if endpoint is None:
+            return False
+        host, port = endpoint
+        try:
+            with socket.create_connection((host, port), 0.2):
+                return True
+        except OSError:
+            return False
+
+    def _open_when_ready(self, tries: int) -> bool:
+        if self._port_open() or tries <= 0:
+            self._open_page()
+            return False
+        GLib.timeout_add(200, self._open_when_ready, tries - 1)
+        return False
 
     def _open_page(self) -> bool:
         if not self.tool.url:
             return False
-        window = self.get_root()
-        parent = window if isinstance(window, Gtk.Window) else None
-        try:
-            Gtk.UriLauncher.new(self.tool.url).launch(parent, None, None)
-        except GLib.Error:
-            subprocess.Popen(
-                ["xdg-open", self.tool.url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+        # xdg-open returns at once. UriLauncher.launch() on the click thread
+        # waits on a portal reply and never comes back, so the button stays busy.
+        subprocess.Popen(
+            ["xdg-open", self.tool.url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         return False
 
     def _settle(self, want_running: bool, tries: int) -> bool:
@@ -1235,8 +1270,8 @@ class ToolsPanel(Adw.ApplicationWindow):
         header = self._header
         if root is None or header is None:
             return False
-        _mn, root_h = root.measure(Gtk.Orientation.VERTICAL, width)
-        _mn, header_h = header.measure(Gtk.Orientation.VERTICAL, width)
+        root_h = _natural_height(root, width)
+        header_h = _natural_height(header, width)
         need = int(root_h + header_h)
         if need > 1 and self.get_height() < need:
             self.set_default_size(width, need)
