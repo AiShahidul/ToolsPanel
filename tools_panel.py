@@ -123,6 +123,20 @@ BROWSER_ARRANGE = _first_existing(
     HOME / "MEGA/IVAC Works/Browser arrange",
 ) or (HOME / "MEGA/IVAC Works/Browser arrange")
 
+# Desktop checkout is "~/GitHub Repository". This laptop tree is
+# "~/Github All Repositories" and must not launch the desktop grid.
+ON_LAPTOP = (HOME / "Github All Repositories").is_dir() and not (
+    HOME / "GitHub Repository"
+).is_dir()
+if ON_LAPTOP:
+    ARRANGE_SCRIPT = "Browser-Auto-Arrange-Laptop.sh"
+    ARRANGE_SUBTITLE = "Edge × 4 · laptop"
+    ARRANGE_ICON = "web-browser-symbolic"
+else:
+    ARRANGE_SCRIPT = "Browser-Auto-Arrange.sh"
+    ARRANGE_SUBTITLE = "Chrome×7 + Edge×7"
+    ARRANGE_ICON = "chrome-icon.svg"
+
 BROWSER_BOT = _first_existing(
     HOME / "GitHub Repository/ivac-dgepay-confirm",
     HOME / "Github All Repositories/ivac-dgepay-confirm",
@@ -569,12 +583,12 @@ def build_tools() -> list[Tool]:
         Tool(
             id="browser_arrange",
             name="Browser Auto Arrange",
-            subtitle="Chrome×7 + Edge×7",
+            subtitle=ARRANGE_SUBTITLE,
             kind="oneshot",
-            icon="chrome-icon.svg",
-            start_cmd=["bash", str(BROWSER_ARRANGE / "Browser-Auto-Arrange.sh")],
+            icon=ARRANGE_ICON,
+            start_cmd=["bash", str(BROWSER_ARRANGE / ARRANGE_SCRIPT)],
             cwd=BROWSER_ARRANGE,
-            required=[BROWSER_ARRANGE / "Browser-Auto-Arrange.sh"],
+            required=[BROWSER_ARRANGE / ARRANGE_SCRIPT],
         ),
         Tool(
             id="browser_bot",
