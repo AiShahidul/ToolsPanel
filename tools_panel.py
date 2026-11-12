@@ -125,6 +125,7 @@ BROWSER_ARRANGE = _first_existing(
 
 BROWSER_BOT = _first_existing(
     HOME / "GitHub Repository/ivac-dgepay-confirm",
+    HOME / "Github All Repositories/ivac-dgepay-confirm",
 ) or (HOME / "GitHub Repository/ivac-dgepay-confirm")
 
 PHONE_MGR = PDF_ROOT / "T phone_manager"
